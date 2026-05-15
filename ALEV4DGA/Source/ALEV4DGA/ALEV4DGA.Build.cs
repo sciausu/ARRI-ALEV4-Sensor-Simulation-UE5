@@ -19,7 +19,14 @@ public class ALEV4DGA : ModuleRules
             "RenderCore",
             "RHI",
             "Projects",
+            "CinematicCamera",
         });
+
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.Add("UnrealEd");
+            PrivateDependencyModuleNames.Add("LevelEditor");
+        }
 
         PrivateIncludePaths.AddRange(new string[]
         {

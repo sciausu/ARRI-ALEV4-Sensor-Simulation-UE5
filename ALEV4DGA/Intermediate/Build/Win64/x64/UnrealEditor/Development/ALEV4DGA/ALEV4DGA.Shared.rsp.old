@@ -1,4 +1,5 @@
 /I "."
+/I "Runtime/Renderer/Internal"
 /I "C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Source/ALEV4DGA/Private"
 /I "../Intermediate/Build/Win64/UnrealEditor/Inc/CoreUObject/UHT"
 /I "../Intermediate/Build/Win64/UnrealEditor/Inc/CoreUObject/VerseVMBytecode"

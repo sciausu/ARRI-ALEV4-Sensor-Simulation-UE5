@@ -5,6 +5,12 @@
 #include "ShaderParameterStruct.h"
 #include "GlobalShader.h"
 #include "PostProcess/PostProcessInputs.h"
+#include "CineCameraActor.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "LevelEditorViewport.h"
+#endif
 
 // Console variable to toggle the simulation on/off at runtime
 static TAutoConsoleVariable<int32> CVarALEV4DGAEnabled(
@@ -59,6 +65,22 @@ FALEV4DGASceneExtension::FALEV4DGASceneExtension(const FAutoRegister& AutoRegist
     : FSceneViewExtensionBase(AutoRegister)
 {
 }
+void FALEV4DGASceneExtension::SetupViewFamily(FSceneViewFamily& InViewFamily)
+{
+    // Runs on game thread once per frame
+    bool bIsPiloting = false;
+
+#if WITH_EDITOR
+    if (GCurrentLevelEditingViewportClient)
+    {
+        const AActor* PilotedActor = GCurrentLevelEditingViewportClient->GetActorLock().GetLockedActor();
+        bIsPiloting = PilotedActor && PilotedActor->IsA<ACineCameraActor>();
+    }
+#endif
+
+    bEditorPilotingCineCam.store(bIsPiloting);
+}
+
 
 void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     FRDGBuilder& GraphBuilder,
@@ -66,8 +88,20 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     const FPostProcessingInputs& Inputs)
 {
     checkSlow(IsInRenderingThread());
-    // Skip processing if disabled
+
     if (CVarALEV4DGAEnabled.GetValueOnRenderThread() == 0)
+    {
+        return;
+    }
+
+    // Check if this is a Cine Camera view by either path:
+    // 1. Runtime ViewActor (works for PIE and MRQ)
+    // 2. Editor viewport piloting state (works in editor)
+    const AActor* ViewActor = View.ViewActor.Get();
+    const bool bIsCineCameraView = (ViewActor && ViewActor->IsA<ACineCameraActor>())
+        || bEditorPilotingCineCam.load();
+
+    if (!bIsCineCameraView)
     {
         return;
     }
