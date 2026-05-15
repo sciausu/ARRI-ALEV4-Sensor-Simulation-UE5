@@ -6,7 +6,15 @@
 #include "GlobalShader.h"
 #include "PostProcess/PostProcessInputs.h"
 
-
+// Console variable to toggle the simulation on/off at runtime
+static TAutoConsoleVariable<int32> CVarALEV4DGAEnabled(
+    TEXT("r.ALEV4DGA.Enabled"),
+    1,
+    TEXT("Enable the ARRI ALEV4 DGA simulation.\n")
+    TEXT("  0: Disabled\n")
+    TEXT("  1: Enabled (default)"),
+    ECVF_RenderThreadSafe
+);
 // ----------------------------------------------------------------
 // Shader parameter struct
 // Must match parameters declared in DualGrainArchitecture.usf
@@ -58,6 +66,11 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     const FPostProcessingInputs& Inputs)
 {
     checkSlow(IsInRenderingThread());
+    // Skip processing if disabled
+    if (CVarALEV4DGAEnabled.GetValueOnRenderThread() == 0)
+    {
+        return;
+    }
 
     // Get the scene colour texture from the post-process inputs
     FRDGTextureRef SceneColorTexture = (*Inputs.SceneTextures)->SceneColorTexture;
