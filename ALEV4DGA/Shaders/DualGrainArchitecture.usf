@@ -1,0 +1,27 @@
+#include "/Engine/Public/Platform.ush"
+
+Texture2D SceneColorTexture;
+SamplerState SceneColorSampler;
+float HighGainAmount;
+float LowGainAmount;
+float GrainIntensity;
+float2 ViewSize;
+RWTexture2D<float4> OutputTexture;
+
+[numthreads(8, 8, 1)]
+void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    // Bounds check
+    if (DispatchThreadId.x >= (uint) ViewSize.x || DispatchThreadId.y >= (uint) ViewSize.y)
+        return;
+
+    // Sample the scene colour at this pixel
+    int3 Coord = int3(DispatchThreadId.xy, 0);
+    float4 SceneColor = SceneColorTexture.Load(Coord);
+
+    // Boost the red channel by 50% so we can visually confirm we're reading/writing scene colour
+    float4 TintedColor = SceneColor;
+    TintedColor.r = saturate(SceneColor.r * 1.5);
+
+    OutputTexture[DispatchThreadId.xy] = TintedColor;
+}

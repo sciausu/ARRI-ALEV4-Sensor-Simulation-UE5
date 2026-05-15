@@ -1,0 +1,14 @@
+/NOLOGO
+/errorReport:prompt
+/MACHINE:x64
+/SUBSYSTEM:WINDOWS
+/DEF
+/NAME:"UnrealEditor-ALEV4DGA.dll"
+/IGNORE:4221
+/NODEFAULTLIB
+"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Intermediate/Build/Win64/x64/Alev4SimEditor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_4.h.obj"
+"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Intermediate/Build/Win64/x64/UnrealEditor/Development/ALEV4DGA/Module.ALEV4DGA.cpp.obj"
+"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Intermediate/Build/Win64/x64/UnrealEditor/Development/ALEV4DGA/ALEV4DGAModule.cpp.obj"
+"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Intermediate/Build/Win64/x64/UnrealEditor/Development/ALEV4DGA/DualGrainSceneExtension.cpp.obj"
+"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Intermediate/Build/Win64/x64/UnrealEditor/Development/ALEV4DGA/Default.rc2.res"
+/OUT:"C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Intermediate/Build/Win64/x64/UnrealEditor/Development/ALEV4DGA/UnrealEditor-ALEV4DGA.lib"

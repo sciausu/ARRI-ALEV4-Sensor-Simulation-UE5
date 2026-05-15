@@ -1,0 +1,10 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.ALEV4DGA.cpp.obj": [
+			"PerModuleInline.gen.cpp.obj",
+			"ALEV4DGAModule.cpp.obj",
+			"DualGrainSceneExtension.cpp.obj"
+		]
+	}
+}

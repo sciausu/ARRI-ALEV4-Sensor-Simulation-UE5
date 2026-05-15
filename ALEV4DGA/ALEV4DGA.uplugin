@@ -1,0 +1,24 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "ALEV4 Dual Grain Architecture",
+    "Description": "Simulates the ARRI ALEV4 sensor Dual Grain Architecture in UE5",
+    "Category": "Rendering",
+    "CreatedBy": "Stefan Ciausu",
+    "CreatedByURL": "",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": false,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "ALEV4DGA",
+            "Type": "Runtime",
+            "LoadingPhase": "PostConfigInit"
+        }
+    ]
+}

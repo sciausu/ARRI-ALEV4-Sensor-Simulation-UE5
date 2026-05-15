@@ -1,0 +1,28 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\source\\alev4dga\\private\\alev4dgamodule.cpp",
+        "ProvidedModule": "",
+        "PCH": "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\intermediate\\build\\win64\\x64\\alev4simeditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.inclorderunreal5_4.h.pch",
+        "Includes": [
+            "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\alev4dga\\definitions.alev4dga.h",
+            "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\source\\alev4dga\\public\\alev4dgamodule.h",
+            "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\source\\alev4dga\\public\\dualgrainsceneextension.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\engine\\public\\sceneviewextension.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\engine\\public\\sceneviewextensioncontext.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\intermediate\\build\\win64\\unrealeditor\\inc\\engine\\uht\\sceneviewextensioncontext.generated.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\engine\\public\\scenetexturesconfig.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\rendercore\\public\\gbufferinfo.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\interfaces\\ipluginmanager.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\plugindescriptor.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\custombuildsteps.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\localizationdescriptor.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\moduledescriptor.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\plugindisalloweddescriptor.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\pluginreferencedescriptor.h",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\projects\\public\\versescope.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

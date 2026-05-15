@@ -1,0 +1,15 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\alev4dga\\module.alev4dga.cpp",
+        "ProvidedModule": "",
+        "PCH": "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\intermediate\\build\\win64\\x64\\alev4simeditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.inclorderunreal5_4.h.pch",
+        "Includes": [
+            "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\alev4dga\\definitions.alev4dga.h",
+            "c:\\users\\sciau\\documents\\unreal projects\\alev4sim\\plugins\\alev4dga\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\alev4dga\\permoduleinline.gen.cpp",
+            "c:\\program files\\epic games\\ue_5.7\\engine\\source\\runtime\\core\\public\\hal\\permoduleinline.inl"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}
