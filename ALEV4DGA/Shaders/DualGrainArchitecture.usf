@@ -4,24 +4,83 @@ Texture2D SceneColorTexture;
 SamplerState SceneColorSampler;
 float HighGainAmount;
 float LowGainAmount;
-float GrainIntensity;
+float ShadowThreshold;
+float HighlightThreshold;
 float2 ViewSize;
 RWTexture2D<float4> OutputTexture;
+uint LogC4Enabled;
+
+// ARRI LogC4 Curve constants (per ARRI LogC4 Specification, Section 4.1.1)
+static const float LogC4_a = (262144.0 - 16.0) / 117.45; // 2^18 - 16 over 117.45
+static const float LogC4_b = (1023.0 - 95.0) / 1023.0;
+static const float LogC4_c = 95.0 / 1023.0;
+
+// Threshold and slope are derived from a, b, c per spec equations 2b, 2c
+// Precomputed here as constants — they're fixed for all pixels
+static const float LogC4_s = (7.0 * 0.6931471805599453 * exp2(7.0 - 14.0 * LogC4_c / LogC4_b)) / (LogC4_a * LogC4_b);
+static const float LogC4_t = (exp2(14.0 * (-LogC4_c / LogC4_b) + 6.0) - 64.0) / LogC4_a;
+
+// Encode linear scene-referred light to LogC4 signal
+// Reference: ARRI LogC4 Specification Section 4.1.1, also Appendix A CTL
+float3 EncodeLogC4(float3 LinearScene)
+{
+    float3 LogC4;
+
+    [unroll]
+    for (int i = 0; i < 3; ++i)
+    {
+        float x = LinearScene[i];
+        if (x < LogC4_t)
+        {
+            // Linear segment for very dark / negative values
+            LogC4[i] = (x - LogC4_t) / LogC4_s;
+        }
+        else
+        {
+            // Logarithmic segment — the actual log curve
+            LogC4[i] = (log2(LogC4_a * x + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c;
+        }
+    }
+
+    return LogC4;
+}
+
 
 [numthreads(8, 8, 1)]
 void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    // Bounds check
+    // Bounds check — group size may exceed the actual image
     if (DispatchThreadId.x >= (uint) ViewSize.x || DispatchThreadId.y >= (uint) ViewSize.y)
         return;
 
-    // Sample the scene colour at this pixel
+    // Sample the linear scene colour at this pixel.
+    // Stored as FP16 in the texture, promoted to FP32 in the register.
     int3 Coord = int3(DispatchThreadId.xy, 0);
     float4 SceneColor = SceneColorTexture.Load(Coord);
 
-    // Boost the red channel by 50% so we can visually confirm we're reading/writing scene colour
-    float4 TintedColor = SceneColor;
-    TintedColor.r = saturate(SceneColor.r * 1.5);
+    // Rec.709 luminance — single dot product, single GPU cycle.
+    // Coefficients sum to 1.0 so the result is in the same range as the inputs.
+    float Luminance = dot(SceneColor.rgb, float3(0.2126, 0.7152, 0.0722));
 
-    OutputTexture[DispatchThreadId.xy] = TintedColor;
+    // High-gain path: simulates a sensor read with high amplification.
+    // Lifts shadows. Highlights will exceed 1.0 — that's intentional.
+    float3 HighGainPath = SceneColor.rgb * HighGainAmount;
+
+    // Low-gain path: simulates a sensor read with low amplification.
+    // Preserves highlights. Shadows are crushed.
+    float3 LowGainPath = SceneColor.rgb * LowGainAmount;
+
+    // Smooth luminance-weighted blend mask.
+    // 0 in shadows (full high-gain), 1 in highlights (full low-gain),
+    // smooth S-curve transition between the two thresholds.
+    float Mask = smoothstep(ShadowThreshold, HighlightThreshold, Luminance);
+    
+    // Merge the two paths
+    float3 Merged = lerp(HighGainPath, LowGainPath, Mask);
+
+// Apply LogC4 encoding if enabled
+    float3 FinalRGB = (LogC4Enabled != 0) ? EncodeLogC4(Merged) : Merged;
+
+// Write back. FP32 register narrows to FP16 on store.
+    OutputTexture[DispatchThreadId.xy] = float4(FinalRGB, SceneColor.a);
 }
