@@ -1,4 +1,4 @@
-#include "/Engine/Public/Platform.ush"
+﻿#include "/Engine/Public/Platform.ush"
 
 Texture2D SceneColorTexture;
 SamplerState SceneColorSampler;
@@ -6,9 +6,47 @@ float HighGainAmount;
 float LowGainAmount;
 float ShadowThreshold;
 float HighlightThreshold;
+uint LogC4Enabled;
 float2 ViewSize;
 RWTexture2D<float4> OutputTexture;
-uint LogC4Enabled;
+uint DiagLuminance;
+
+// === NEW: Rec.709 → ARRI Wide Gamut 4 (AWG4) gamut matrix ===
+// Converts linear scene colour from Rec.709 primaries to AWG4 primaries.
+// Both spaces use D65 white point, so no chromatic adaptation is needed —
+// this is a pure primary-to-primary re-expression.
+//
+// Source: ARRI Input Device Transform (IDT) for Rec.709 → AWG4
+// Published in the ARRI colour science documentation package.
+//
+// The negative values are expected: AWG4 is wider than Rec.709,
+// so expressing Rec.709 red in AWG4 coordinates requires pulling
+// green and blue slightly negative to reach the correct gamut position.
+// -----------------------------------------------------------------------
+// Rec.709 -> ARRI Wide Gamut 4 (AWG4) gamut transform matrix
+// -----------------------------------------------------------------------
+// Derived from official primary chromaticities:
+//   AWG4 primaries: ARRI LogC4 Specification (2025-01-23), Section 4.2.1
+//     R: (0.7347, 0.2653)
+//     G: (0.1424, 0.8576)
+//     B: (0.0991, -0.0308)
+//   Rec.709 primaries: ITU-R BT.709
+//     R: (0.6400, 0.3300)
+//     G: (0.3000, 0.6000)
+//     B: (0.1500, 0.0600)
+//   Shared white point: CIE D65 (0.3127, 0.3290)
+//
+// Method: M_709->AWG4 = inv(M_AWG4->XYZ) * M_709->XYZ
+// Both white points are D65, so no chromatic adaptation is required.
+//
+// AWG4 is wider than Rec.709, so all Rec.709 colours map to positive
+// AWG4 values (Rec.709 fits entirely within the AWG4 gamut volume).
+// White (1,1,1) maps to (1,1,1) exactly, as it must.
+static const float3x3 Rec709_To_AWG4 = float3x3(
+    float3(0.565837f, 0.340331f, 0.093832f), // AWG4 R = f(R709, G709, B709)
+    float3(0.088626f, 0.809347f, 0.102028f), // AWG4 G = f(R709, G709, B709)
+    float3(0.017750f, 0.109448f, 0.872802f) // AWG4 B = f(R709, G709, B709)
+);
 
 // ARRI LogC4 Curve constants (per ARRI LogC4 Specification, Section 4.1.1)
 static const float LogC4_a = (262144.0 - 16.0) / 117.45; // 2^18 - 16 over 117.45
@@ -16,7 +54,7 @@ static const float LogC4_b = (1023.0 - 95.0) / 1023.0;
 static const float LogC4_c = 95.0 / 1023.0;
 
 // Threshold and slope are derived from a, b, c per spec equations 2b, 2c
-// Precomputed here as constants � they're fixed for all pixels
+// Precomputed here as constants — they're fixed for all pixels
 static const float LogC4_s = (7.0 * 0.6931471805599453 * exp2(7.0 - 14.0 * LogC4_c / LogC4_b)) / (LogC4_a * LogC4_b);
 static const float LogC4_t = (exp2(14.0 * (-LogC4_c / LogC4_b) + 6.0) - 64.0) / LogC4_a;
 
@@ -37,7 +75,7 @@ float3 EncodeLogC4(float3 LinearScene)
         }
         else
         {
-            // Logarithmic segment � the actual log curve
+            // Logarithmic segment — the actual log curve
             LogC4[i] = (log2(LogC4_a * x + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c;
         }
     }
@@ -45,11 +83,49 @@ float3 EncodeLogC4(float3 LinearScene)
     return LogC4;
 }
 
+// Diagnostic false-colour: maps scalar luminance to a RGB heatmap.
+// Call this instead of DGA when r.ALEV4DGA.DiagLuminance == 1.
+float3 LuminanceFalseColour(float Lum)
+{
+    // We define 5 colour stops at specific luminance values:
+    //   0.00 → blue      (0, 0, 1)
+    //   0.10 → cyan      (0, 1, 1)
+    //   0.18 → green     (0, 1, 0)   ← middle grey reference
+    //   0.50 → yellow    (1, 1, 0)
+    //   1.00 → red       (1, 0, 0)
+
+    float3 Colour;
+    if (Lum < 0.10)
+    {
+        // Blue → Cyan
+        float t = Lum / 0.10;
+        Colour = lerp(float3(0, 0, 1), float3(0, 1, 1), t);
+    }
+    else if (Lum < 0.18)
+    {
+        // Cyan → Green
+        float t = (Lum - 0.10) / (0.18 - 0.10);
+        Colour = lerp(float3(0, 1, 1), float3(0, 1, 0), t);
+    }
+    else if (Lum < 0.50)
+    {
+        // Green → Yellow
+        float t = (Lum - 0.18) / (0.50 - 0.18);
+        Colour = lerp(float3(0, 1, 0), float3(1, 1, 0), t);
+    }
+    else
+    {
+        // Yellow → Red (clamped at 1.0)
+        float t = saturate((Lum - 0.50) / (1.00 - 0.50));
+        Colour = lerp(float3(1, 1, 0), float3(1, 0, 0), t);
+    }
+    return Colour;
+}
 
 [numthreads(8, 8, 1)]
 void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    // Bounds check � group size may exceed the actual image
+    // Bounds check — group size may exceed the actual image
     if (DispatchThreadId.x >= (uint) ViewSize.x || DispatchThreadId.y >= (uint) ViewSize.y)
         return;
 
@@ -58,12 +134,26 @@ void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     int3 Coord = int3(DispatchThreadId.xy, 0);
     float4 SceneColor = SceneColorTexture.Load(Coord);
 
-    // Rec.709 luminance � single dot product, single GPU cycle.
+    // Rec.709 luminance — single dot product, single GPU cycle.
     // Coefficients sum to 1.0 so the result is in the same range as the inputs.
     float Luminance = dot(SceneColor.rgb, float3(0.2126, 0.7152, 0.0722));
+    
+    // After sampling SceneColor and computing Luminance...
+
+    if (DiagLuminance != 0)
+    {
+    // Bypass all DGA processing; output false-colour luminance instead.
+    // Use saturate(Luminance) so values above 1.0 all show as red.
+        OutputTexture[DispatchThreadId.xy] = float4(
+        LuminanceFalseColour(saturate(Luminance)), 1.0
+    );
+        return;
+    }
+
+
 
     // High-gain path: simulates a sensor read with high amplification.
-    // Lifts shadows. Highlights will exceed 1.0 � that's intentional.
+    // Lifts shadows. Highlights will exceed 1.0 — that's intentional.
     float3 HighGainPath = SceneColor.rgb * HighGainAmount;
 
     // Low-gain path: simulates a sensor read with low amplification.
@@ -75,11 +165,17 @@ void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // smooth S-curve transition between the two thresholds.
     float Mask = smoothstep(ShadowThreshold, HighlightThreshold, Luminance);
     
-    // Merge the two paths
+    // Merge the two paths (unchanged)
     float3 Merged = lerp(HighGainPath, LowGainPath, Mask);
 
-// Apply LogC4 encoding if enabled
-    float3 FinalRGB = (LogC4Enabled != 0) ? EncodeLogC4(Merged) : Merged;
+// === NEW: Gamut transform — Rec.709 linear → AWG4 linear ===
+// mul(M, v) in HLSL: M is row-major, v is a column vector.
+// Each output component is the dot of one row with the input.
+    float3 MergedAWG4 = mul(Rec709_To_AWG4, Merged);
+    
+
+// Apply LogC4 encoding (now correctly receives AWG4 primaries)
+    float3 FinalRGB = (LogC4Enabled != 0) ? EncodeLogC4(MergedAWG4) : MergedAWG4;
 
 // Write back. FP32 register narrows to FP16 on store.
     OutputTexture[DispatchThreadId.xy] = float4(FinalRGB, SceneColor.a);

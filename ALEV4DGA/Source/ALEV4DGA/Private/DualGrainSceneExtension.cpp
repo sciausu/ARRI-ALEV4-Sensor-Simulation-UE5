@@ -60,8 +60,18 @@ static TAutoConsoleVariable<int32> CVarALEV4DGALogC4Enabled(
     TEXT("r.ALEV4DGA.LogC4"),
     1,
     TEXT("Apply ARRI LogC4 transfer function after the dual-grain merge.\n")
-    TEXT("  0: Disabled — output stays in linear (wide-range)\n")
-    TEXT("  1: Enabled (default) — output is LogC4-encoded"),
+    TEXT("  0: Disabled - output stays in linear (wide-range)\n")
+    TEXT("  1: Enabled (default) - output is LogC4-encoded"),
+    ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarALEV4DGADiagLuminance(
+    TEXT("r.ALEV4DGA.DiagLuminance"),
+    0,
+    TEXT("Diagnostic mode: replaces DGA output with a false-colour luminance heatmap.\n")
+    TEXT("  0: Disabled (default)\n")
+    TEXT("  1: Show scene luminance as false colour\n")
+    TEXT("     Blue=dark, Green=0.18 middle grey, Yellow=highlights, Red=clipped"),
     ECVF_RenderThreadSafe
 );
 
@@ -79,6 +89,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FDualGrainArchitectureParameters, )
     SHADER_PARAMETER(uint32, LogC4Enabled)
     SHADER_PARAMETER(FVector2f, ViewSize)
     SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, OutputTexture)
+    SHADER_PARAMETER(uint32, DiagLuminance)
 END_SHADER_PARAMETER_STRUCT()
 
 // ----------------------------------------------------------------
@@ -140,12 +151,15 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
         return;
     }
 
+    
+
     // Check if this is a Cine Camera view by either path:
     // 1. Runtime ViewActor (works for PIE and MRQ)
     // 2. Editor viewport piloting state (works in editor)
     const AActor* ViewActor = View.ViewActor.Get();
     const bool bIsCineCameraView = (ViewActor && ViewActor->IsA<ACineCameraActor>())
         || bEditorPilotingCineCam.load();
+
 
     if (!bIsCineCameraView)
     {
@@ -187,6 +201,7 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     PassParameters->ViewSize = FVector2f(OutputSize.X, OutputSize.Y);
     PassParameters->OutputTexture = GraphBuilder.CreateUAV(OutputTexture);
     PassParameters->LogC4Enabled = CVarALEV4DGALogC4Enabled.GetValueOnRenderThread() != 0 ? 1u : 0u;
+    PassParameters->DiagLuminance = CVarALEV4DGADiagLuminance.GetValueOnRenderThread() != 0 ? 1u : 0u;
 
     TShaderMapRef<FDualGrainArchitectureCS> ComputeShader(
         GetGlobalShaderMap(GMaxRHIFeatureLevel)
