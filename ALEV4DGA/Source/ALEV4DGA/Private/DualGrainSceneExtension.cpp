@@ -75,6 +75,21 @@ static TAutoConsoleVariable<int32> CVarALEV4DGADiagLuminance(
     ECVF_RenderThreadSafe
 );
 
+static TAutoConsoleVariable<float> CVarALEV4DGANoiseScale(
+    TEXT("r.ALEV4DGA.NoiseScale"), 1.0f,
+    TEXT("Master scale for simulated sensor noise (0 = off, 1 = measured ALEXA 35 level)."),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<float> CVarALEV4DGANoiseReadSigma(
+    TEXT("r.ALEV4DGA.NoiseReadSigma"), 0.0026f,
+    TEXT("Read-noise floor, scene-referred linear. Measured from ALEXA 35 LogC4 footage."),
+    ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<float> CVarALEV4DGANoiseShotK(
+    TEXT("r.ALEV4DGA.NoiseShotK"), 0.00103f,
+    TEXT("Shot-noise coefficient k in sigma=sqrt(read^2 + k*signal). Measured."),
+    ECVF_RenderThreadSafe);
+
 // ----------------------------------------------------------------
 // Shader parameter struct
 // Must match parameters declared in DualGrainArchitecture.usf
@@ -90,6 +105,11 @@ BEGIN_SHADER_PARAMETER_STRUCT(FDualGrainArchitectureParameters, )
     SHADER_PARAMETER(FVector2f, ViewSize)
     SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, OutputTexture)
     SHADER_PARAMETER(uint32, DiagLuminance)
+    SHADER_PARAMETER(float, NoiseScale)
+    SHADER_PARAMETER(float, NoiseReadSigma)
+    SHADER_PARAMETER(float, NoiseShotK)
+    SHADER_PARAMETER(uint32, NoiseFrameIndex)
+    SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 END_SHADER_PARAMETER_STRUCT()
 
 // ----------------------------------------------------------------
@@ -202,6 +222,11 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     PassParameters->OutputTexture = GraphBuilder.CreateUAV(OutputTexture);
     PassParameters->LogC4Enabled = CVarALEV4DGALogC4Enabled.GetValueOnRenderThread() != 0 ? 1u : 0u;
     PassParameters->DiagLuminance = CVarALEV4DGADiagLuminance.GetValueOnRenderThread() != 0 ? 1u : 0u;
+    PassParameters->View = View.ViewUniformBuffer; // added
+    PassParameters->NoiseScale = CVarALEV4DGANoiseScale.GetValueOnRenderThread();
+    PassParameters->NoiseReadSigma = CVarALEV4DGANoiseReadSigma.GetValueOnRenderThread();
+    PassParameters->NoiseShotK = CVarALEV4DGANoiseShotK.GetValueOnRenderThread();
+    PassParameters->NoiseFrameIndex = (uint32)GFrameNumberRenderThread;
 
     TShaderMapRef<FDualGrainArchitectureCS> ComputeShader(
         GetGlobalShaderMap(GMaxRHIFeatureLevel)
