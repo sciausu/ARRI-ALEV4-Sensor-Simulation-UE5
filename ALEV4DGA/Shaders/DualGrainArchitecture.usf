@@ -121,59 +121,44 @@ float3 ApplySensorNoise(float3 LinearScene, uint2 Pixel, uint FrameIndex)
     if (NoiseScale <= 0.0)
         return LinearScene;
 
-    // Per-channel shot+read sigma — shot term uses each channel's own signal,
-    // which gives natural (slightly chromatic) grain.
-    float3 Sig = sqrt(NoiseReadSigma * NoiseReadSigma
-                      + NoiseShotK * max(LinearScene, 0.0));
-
+    // Per-channel shot+read sigma; shot term uses each channel's own signal.
+    float3 Sig = sqrt(NoiseReadSigma * NoiseReadSigma + NoiseShotK * max(LinearScene, 0.0));
     uint baseSeed = FrameIndex * 9781u;
-    float3 G = float3(
-        Gaussian(Pixel, baseSeed + 0u),
-        Gaussian(Pixel, baseSeed + 1u),
-        Gaussian(Pixel, baseSeed + 2u));
-
+    float3 G = float3(Gaussian(Pixel, baseSeed + 0u),
+                      Gaussian(Pixel, baseSeed + 1u),
+                      Gaussian(Pixel, baseSeed + 2u));
     return max(LinearScene + NoiseScale * Sig * G, 0.0);
 }
 
 
 
-// Diagnostic false-colour: maps scalar luminance to a RGB heatmap.
-// Call this instead of DGA when r.ALEV4DGA.DiagLuminance == 1.
-float3 LuminanceFalseColour(float Lum)
+// ARRI-style false colour, computed on the LogC4 code (ARRI computes on the LogC signal).
+// Greyscale base; only exposure zones painted. Bands anchored to physical landmarks:
+// green = 18% grey, pink = skin/+1 stop, yellow = near clip, red = clip, blue/purple = shadow/black.
+// Verify exact ALEXA 35 bounds against ARRI's "LogC4 False Color Specification" PDF and cite it.
+float3 ARRIFalseColour(float Lum)
 {
-    // We define 5 colour stops at specific luminance values:
-    //   0.00 → blue      (0, 0, 1)
-    //   0.10 → cyan      (0, 1, 1)
-    //   0.18 → green     (0, 1, 0)   ← middle grey reference
-    //   0.50 → yellow    (1, 1, 0)
-    //   1.00 → red       (1, 0, 0)
+    float code = (Lum < LogC4_t)
+        ? (Lum - LogC4_t) / LogC4_s
+        : (log2(LogC4_a * Lum + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c;
 
-    float3 Colour;
-    if (Lum < 0.10)
-    {
-        // Blue → Cyan
-        float t = Lum / 0.10;
-        Colour = lerp(float3(0, 0, 1), float3(0, 1, 1), t);
-    }
-    else if (Lum < 0.18)
-    {
-        // Cyan → Green
-        float t = (Lum - 0.10) / (0.18 - 0.10);
-        Colour = lerp(float3(0, 1, 1), float3(0, 1, 0), t);
-    }
-    else if (Lum < 0.50)
-    {
-        // Green → Yellow
-        float t = (Lum - 0.18) / (0.50 - 0.18);
-        Colour = lerp(float3(0, 1, 0), float3(1, 1, 0), t);
-    }
-    else
-    {
-        // Yellow → Red (clamped at 1.0)
-        float t = saturate((Lum - 0.50) / (1.00 - 0.50));
-        Colour = lerp(float3(1, 1, 0), float3(1, 0, 0), t);
-    }
-    return Colour;
+    float g = saturate(code);
+    float3 colour = float3(g, g, g); // greyscale base
+
+    if (code < 0.102)
+        colour = float3(0.5, 0.0, 0.6); // purple — black clip
+    else if (code < 0.147)
+        colour = float3(0.0, 0.3, 1.0); // blue   — shadow/near black
+    else if (code >= 0.259 && code <= 0.298)
+        colour = float3(0.0, 1.0, 0.0); // GREEN  — 18% grey
+    else if (code >= 0.316 && code <= 0.358)
+        colour = float3(1.0, 0.45, 0.7); // pink   — skin / +1 stop
+    else if (code >= 0.621 && code <= 0.686)
+        colour = float3(1.0, 1.0, 0.0); // yellow — near clip
+    else if (code > 0.686)
+        colour = float3(1.0, 0.0, 0.0); // red    — clipping
+
+    return colour;
 }
 
 [numthreads(8, 8, 1)]
@@ -203,7 +188,7 @@ void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // Bypass all DGA processing; output false-colour luminance instead.
     // Use saturate(Luminance) so values above 1.0 all show as red.
         OutputTexture[DispatchThreadId.xy] = float4(
-        LuminanceFalseColour(saturate(Luminance)), 1.0
+        ARRIFalseColour(saturate(Luminance)), 1.0
     );
         return;
     }
@@ -227,7 +212,7 @@ void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     float3 Merged = lerp(HighGainPath, LowGainPath, Mask);
     
     // NEW: inject sensor noise at the sensor stage (scene-referred linear) there is a previous spot up in the code
-    SceneColor.rgb = ApplySensorNoise(SceneColor.rgb, DispatchThreadId.xy, NoiseFrameIndex);
+    Merged = ApplySensorNoise(Merged, DispatchThreadId.xy, NoiseFrameIndex);
     
 
 // === NEW: Gamut transform — Rec.709 linear → AWG4 linear ===
