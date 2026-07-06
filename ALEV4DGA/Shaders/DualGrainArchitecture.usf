@@ -17,6 +17,7 @@ float NoiseScale; // master scale: 0 = off, 1 = measured ALEXA 35 level
 float NoiseReadSigma; // read-noise floor (linear)
 float NoiseShotK; // shot coefficient k
 uint NoiseFrameIndex; // per-frame seed for temporal grain
+uint SpotMeter;       // 1 = draw centre spot-meter reticle
 
 // === NEW: Rec.709 → ARRI Wide Gamut 4 (AWG4) gamut matrix ===
 // Converts linear scene colour from Rec.709 primaries to AWG4 primaries.
@@ -226,5 +227,23 @@ void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 // Write back. FP32 register narrows to FP16 on store.
     //OutputTexture[DispatchThreadId.xy] = float4(FinalRGB, SceneColor.a); //previous output
-    OutputTexture[DispatchThreadId.xy] = float4(FinalRGB * View.PreExposure, SceneColor.a);
+    float3 OutRGB = FinalRGB * View.PreExposure;
+
+    // Centre spot-meter: paints a reticle with the false-colour exposure ZONE of the
+    // centre pixel. Point it at a grey card and dial manual exposure until it reads GREEN.
+    if (SpotMeter != 0)
+    {
+        int2 c = int2(ViewSize * 0.5);
+        int2 dpix = abs(int2(DispatchThreadId.xy) - c);
+        bool inSwatch = (dpix.x <= 18 && dpix.y <= 18);
+        bool inBorder = (dpix.x <= 24 && dpix.y <= 24) && !inSwatch;
+        if (inSwatch || inBorder)
+        {
+            float3 cs = SceneColorTexture.Load(int3(c, 0)).rgb / View.PreExposure;
+            float cLum = dot(cs, float3(0.2126, 0.7152, 0.0722));
+            OutRGB = inSwatch ? ARRIFalseColour(cLum) : float3(1.0, 1.0, 1.0);
+        }
+    }
+
+    OutputTexture[DispatchThreadId.xy] = float4(OutRGB, SceneColor.a);
 }

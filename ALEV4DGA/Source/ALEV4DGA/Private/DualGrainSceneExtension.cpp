@@ -90,6 +90,11 @@ static TAutoConsoleVariable<float> CVarALEV4DGANoiseShotK(
     TEXT("Shot-noise coefficient k in sigma=sqrt(read^2 + k*signal). Measured."),
     ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarALEV4DGASpotMeter(
+    TEXT("r.ALEV4DGA.SpotMeter"), 0,
+    TEXT("Draw a centre spot-meter reticle (green swatch = 18% grey = correct exposure)."),
+    ECVF_RenderThreadSafe);
+
 // ----------------------------------------------------------------
 // Shader parameter struct
 // Must match parameters declared in DualGrainArchitecture.usf
@@ -109,6 +114,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FDualGrainArchitectureParameters, )
     SHADER_PARAMETER(float, NoiseReadSigma)
     SHADER_PARAMETER(float, NoiseShotK)
     SHADER_PARAMETER(uint32, NoiseFrameIndex)
+    SHADER_PARAMETER(uint32, SpotMeter)
     SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 END_SHADER_PARAMETER_STRUCT()
 
@@ -222,6 +228,7 @@ void FALEV4DGASceneExtension::PrePostProcessPass_RenderThread(
     PassParameters->OutputTexture = GraphBuilder.CreateUAV(OutputTexture);
     PassParameters->LogC4Enabled = CVarALEV4DGALogC4Enabled.GetValueOnRenderThread() != 0 ? 1u : 0u;
     PassParameters->DiagLuminance = CVarALEV4DGADiagLuminance.GetValueOnRenderThread() != 0 ? 1u : 0u;
+    PassParameters->SpotMeter = CVarALEV4DGASpotMeter.GetValueOnRenderThread() != 0 ? 1u : 0u;
     PassParameters->View = View.ViewUniformBuffer; // added
     PassParameters->NoiseScale = CVarALEV4DGANoiseScale.GetValueOnRenderThread();
     PassParameters->NoiseReadSigma = CVarALEV4DGANoiseReadSigma.GetValueOnRenderThread();
