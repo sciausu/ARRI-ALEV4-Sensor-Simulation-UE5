@@ -1,5 +1,7 @@
-﻿#include "/Engine/Public/Platform.ush"
-#include "/Engine/Private/Common.ush" 
+// Common.ush (replaces the bare Platform.ush include) gives us access to the
+// View uniform buffer, which we now bind from C++. We need it for
+// View.PreExposure / View.OneOverPreExposure -- see notes at the pass entry.
+#include "/Engine/Private/Common.ush"
 
 Texture2D SceneColorTexture;
 SamplerState SceneColorSampler;
@@ -7,243 +9,212 @@ float HighGainAmount;
 float LowGainAmount;
 float ShadowThreshold;
 float HighlightThreshold;
+float ExposureOffset;   // NEW: test-exposure offset in stops (r.ALEV4DGA.ExposureOffset)
+float FullWell;         // NEW: simulated ADC full-scale in amplified units (r.ALEV4DGA.FullWell)
 uint LogC4Enabled;
 float2 ViewSize;
 RWTexture2D<float4> OutputTexture;
 uint DiagLuminance;
-float PreExposure;
 
-float NoiseScale; // master scale: 0 = off, 1 = measured ALEXA 35 level
-float NoiseReadSigma; // read-noise floor (linear)
-float NoiseShotK; // shot coefficient k
-uint NoiseFrameIndex; // per-frame seed for temporal grain
-uint SpotMeter;       // 1 = draw centre spot-meter reticle
-
-// === NEW: Rec.709 → ARRI Wide Gamut 4 (AWG4) gamut matrix ===
-// Converts linear scene colour from Rec.709 primaries to AWG4 primaries.
-// Both spaces use D65 white point, so no chromatic adaptation is needed —
-// this is a pure primary-to-primary re-expression.
-//
-// Source: ARRI Input Device Transform (IDT) for Rec.709 → AWG4
-// Published in the ARRI colour science documentation package.
-//
-// The negative values are expected: AWG4 is wider than Rec.709,
-// so expressing Rec.709 red in AWG4 coordinates requires pulling
-// green and blue slightly negative to reach the correct gamut position.
 // -----------------------------------------------------------------------
 // Rec.709 -> ARRI Wide Gamut 4 (AWG4) gamut transform matrix
 // -----------------------------------------------------------------------
 // Derived from official primary chromaticities:
-//   AWG4 primaries: ARRI LogC4 Specification (2025-01-23), Section 4.2.1
-//     R: (0.7347, 0.2653)
-//     G: (0.1424, 0.8576)
-//     B: (0.0991, -0.0308)
+//   AWG4 primaries: ARRI LogC4 Specification, Section 4.2.1
+//     R: (0.7347, 0.2653)  G: (0.1424, 0.8576)  B: (0.0991, -0.0308)
 //   Rec.709 primaries: ITU-R BT.709
-//     R: (0.6400, 0.3300)
-//     G: (0.3000, 0.6000)
-//     B: (0.1500, 0.0600)
 //   Shared white point: CIE D65 (0.3127, 0.3290)
-//
 // Method: M_709->AWG4 = inv(M_AWG4->XYZ) * M_709->XYZ
 // Both white points are D65, so no chromatic adaptation is required.
-//
-// AWG4 is wider than Rec.709, so all Rec.709 colours map to positive
-// AWG4 values (Rec.709 fits entirely within the AWG4 gamut volume).
 // White (1,1,1) maps to (1,1,1) exactly, as it must.
 static const float3x3 Rec709_To_AWG4 = float3x3(
-    float3(0.565837f, 0.340331f, 0.093832f), // AWG4 R = f(R709, G709, B709)
-    float3(0.088626f, 0.809347f, 0.102028f), // AWG4 G = f(R709, G709, B709)
-    float3(0.017750f, 0.109448f, 0.872802f) // AWG4 B = f(R709, G709, B709)
+    float3(0.565837f, 0.340331f, 0.093832f),
+    float3(0.088626f, 0.809347f, 0.102028f),
+    float3(0.017750f, 0.109448f, 0.872802f)
 );
 
-// ARRI LogC4 Curve constants (per ARRI LogC4 Specification, Section 4.1.1)
-static const float LogC4_a = (262144.0 - 16.0) / 117.45; // 2^18 - 16 over 117.45
+// ARRI LogC4 curve constants (per ARRI LogC4 Specification, Section 4.1.1)
+static const float LogC4_a = (262144.0 - 16.0) / 117.45;
 static const float LogC4_b = (1023.0 - 95.0) / 1023.0;
 static const float LogC4_c = 95.0 / 1023.0;
-
-// Threshold and slope are derived from a, b, c per spec equations 2b, 2c
-// Precomputed here as constants — they're fixed for all pixels
 static const float LogC4_s = (7.0 * 0.6931471805599453 * exp2(7.0 - 14.0 * LogC4_c / LogC4_b)) / (LogC4_a * LogC4_b);
 static const float LogC4_t = (exp2(14.0 * (-LogC4_c / LogC4_b) + 6.0) - 64.0) / LogC4_a;
 
-// Encode linear scene-referred light to LogC4 signal
-// Reference: ARRI LogC4 Specification Section 4.1.1, also Appendix A CTL
+// LogC4 signal value for a given linear scene value (log segment only).
+// Valid for x > LogC4_t, which covers every landmark we use below.
+#define LOGC4_OF(x) ((log2(LogC4_a * (x) + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c)
+
+float EncodeLogC4Scalar(float x)
+{
+    if (x < LogC4_t)
+    {
+        return (x - LogC4_t) / LogC4_s;
+    }
+    return LOGC4_OF(x);
+}
+
 float3 EncodeLogC4(float3 LinearScene)
 {
     float3 LogC4;
-
     [unroll]
     for (int i = 0; i < 3; ++i)
     {
-        float x = LinearScene[i];
-        if (x < LogC4_t)
-        {
-            // Linear segment for very dark / negative values
-            LogC4[i] = (x - LogC4_t) / LogC4_s;
-        }
-        else
-        {
-            // Logarithmic segment — the actual log curve
-            LogC4[i] = (log2(LogC4_a * x + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c;
-        }
+        LogC4[i] = EncodeLogC4Scalar(LinearScene[i]);
     }
-
     return LogC4;
 }
 
-// ----------------------------------------------------------------------------
-// Sensor noise — characterised from ALEXA 35 / LogC4 footage (42-frame analysis).
-// Injected in scene-referred LINEAR space as shot+read: sigma=sqrt(read^2+k*S).
-// The LogC4 encode downstream reshapes it into the measured shadow-heavy curve.
-// ----------------------------------------------------------------------------
-uint PCGHash(uint v)
+// -----------------------------------------------------------------------
+// ARRI-convention exposure false colour
+// -----------------------------------------------------------------------
+// Replaces the old continuous blue->cyan->green->yellow->red gradient.
+// Two problems with the old version:
+//   1. It banded on RAW BUFFER luminance, which includes UE's pre-exposure.
+//      Pre-exposure auto-normalises the buffer toward mid-range every frame,
+//      so the chart read "green-ish" regardless of actual scene exposure.
+//      (This is why your box stayed green on an overexposed image.)
+//   2. A continuous gradient has no crisp "correct" band, so it never tells
+//      you which direction to move. ARRI monitors use DISCRETE bands.
+//
+// Bands follow the ARRI false colour convention, anchored to physical
+// exposure landmarks on the LogC4 signal of true scene luminance:
+//   RED     clipped (sensor saturation)             -> decrease exposure
+//   YELLOW  within ~1 stop of clip                  -> decrease exposure
+//   PINK    +1 stop over mid grey (avg. skin tone)
+//   GREEN   18% mid grey, +/- 1/4 stop              -> exposure is correct
+//   GREY    everything in the normal range (shown as the log signal itself,
+//           so the image stays readable)
+//   BLUE    4-6 stops under mid grey (deep shadow)  -> increase exposure
+//   PURPLE  >= 6 stops under (noise floor / crush)  -> increase exposure
+//
+// LogC4 landmarks (for reference): mid grey 0.18 encodes to ~0.278,
+// each stop in the log segment spans ~0.065 of signal.
+static const float FC_GreyLo  = LOGC4_OF(0.18 * 0.84090);  // -1/4 stop, ~0.265
+static const float FC_GreyHi  = LOGC4_OF(0.18 * 1.18921);  // +1/4 stop, ~0.293
+static const float FC_SkinLo  = LOGC4_OF(0.36 * 0.84090);  // +3/4 stop, ~0.322
+static const float FC_SkinHi  = LOGC4_OF(0.36 * 1.18921);  // +5/4 stop, ~0.352
+static const float FC_BlueLo  = LOGC4_OF(0.18 / 64.0);     // -6 stops,  ~0.102
+static const float FC_BlueHi  = LOGC4_OF(0.18 / 16.0);     // -4 stops,  ~0.124
+
+float3 ExposureFalseColour(float TrueLuminance, float ClipLuminance)
 {
-    v = v * 747796405u + 2891336453u;
-    uint word = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
-    return (word >> 22u) ^ word;
-}
+    float S = EncodeLogC4Scalar(max(TrueLuminance, 0.0));
 
-float Hash01(uint2 p, uint seed)
-{
-    uint h = PCGHash(p.x + PCGHash(p.y + PCGHash(seed)));
-    return float(h) * (1.0 / 4294967296.0);
-}
+    // Clip landmarks track the simulated sensor: the low-gain path saturates
+    // at FullWell / LowGainAmount in scene-linear units.
+    float RedAt    = LOGC4_OF(ClipLuminance * 0.925); // ~1/9 stop below clip
+    float YellowAt = LOGC4_OF(ClipLuminance * 0.5);   // 1 stop below clip
 
-// One standard-normal sample (Box–Muller) for a pixel + seed
-float Gaussian(uint2 p, uint seed)
-{
-    float u1 = max(Hash01(p, seed), 1e-7);
-    float u2 = Hash01(p, seed + 0x9E3779B9u);
-    return sqrt(-2.0 * log(u1)) * cos(6.28318530718 * u2);
-}
+    if (S >= RedAt)                        return float3(1.00, 0.00, 0.00); // red
+    if (S >= YellowAt)                     return float3(1.00, 0.85, 0.00); // yellow
+    if (S >= FC_SkinLo && S <= FC_SkinHi)  return float3(1.00, 0.45, 0.75); // pink
+    if (S >= FC_GreyLo && S <= FC_GreyHi)  return float3(0.00, 1.00, 0.00); // green
+    if (S <  FC_BlueLo)                    return float3(0.55, 0.00, 0.85); // purple
+    if (S <  FC_BlueHi)                    return float3(0.10, 0.25, 1.00); // blue
 
-float3 ApplySensorNoise(float3 LinearScene, uint2 Pixel, uint FrameIndex)
-{
-    if (NoiseScale <= 0.0)
-        return LinearScene;
-
-    // Per-channel shot+read sigma; shot term uses each channel's own signal.
-    float3 Sig = sqrt(NoiseReadSigma * NoiseReadSigma + NoiseShotK * max(LinearScene, 0.0));
-    uint baseSeed = FrameIndex * 9781u;
-    float3 G = float3(Gaussian(Pixel, baseSeed + 0u),
-                      Gaussian(Pixel, baseSeed + 1u),
-                      Gaussian(Pixel, baseSeed + 2u));
-    return max(LinearScene + NoiseScale * Sig * G, 0.0);
-}
-
-
-
-// ARRI-style false colour, computed on the LogC4 code (ARRI computes on the LogC signal).
-// Greyscale base; only exposure zones painted. Bands anchored to physical landmarks:
-// green = 18% grey, pink = skin/+1 stop, yellow = near clip, red = clip, blue/purple = shadow/black.
-// Verify exact ALEXA 35 bounds against ARRI's "LogC4 False Color Specification" PDF and cite it.
-float3 ARRIFalseColour(float Lum)
-{
-    float code = (Lum < LogC4_t)
-        ? (Lum - LogC4_t) / LogC4_s
-        : (log2(LogC4_a * Lum + 64.0) - 6.0) / 14.0 * LogC4_b + LogC4_c;
-
-    float g = saturate(code);
-    float3 colour = float3(g, g, g); // greyscale base
-
-    if (code < 0.102)
-        colour = float3(0.5, 0.0, 0.6); // purple — black clip
-    else if (code < 0.147)
-        colour = float3(0.0, 0.3, 1.0); // blue   — shadow/near black
-    else if (code >= 0.259 && code <= 0.298)
-        colour = float3(0.0, 1.0, 0.0); // GREEN  — 18% grey
-    else if (code >= 0.316 && code <= 0.358)
-        colour = float3(1.0, 0.45, 0.7); // pink   — skin / +1 stop
-    else if (code >= 0.621 && code <= 0.686)
-        colour = float3(1.0, 1.0, 0.0); // yellow — near clip
-    else if (code > 0.686)
-        colour = float3(1.0, 0.0, 0.0); // red    — clipping
-
-    return colour;
+    // Normal range: show the log signal as greyscale so the frame is readable
+    return saturate(S).xxx;
 }
 
 [numthreads(8, 8, 1)]
 void DualGrainArchitectureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    // Bounds check — group size may exceed the actual image
     if (DispatchThreadId.x >= (uint) ViewSize.x || DispatchThreadId.y >= (uint) ViewSize.y)
         return;
 
-    // Sample the linear scene colour at this pixel.
-    // Stored as FP16 in the texture, promoted to FP32 in the register.
     int3 Coord = int3(DispatchThreadId.xy, 0);
     float4 SceneColor = SceneColorTexture.Load(Coord);
-    
-    SceneColor.rgb /= View.PreExposure; // added pre exposed buffer
-     // NEW: inject sensor noise at the sensor stage (scene-referred linear) current location is after Merged
-    //SceneColor.rgb = ApplySensorNoise(SceneColor.rgb, DispatchThreadId.xy, NoiseFrameIndex);
 
-    // Rec.709 luminance — single dot product, single GPU cycle.
-    // Coefficients sum to 1.0 so the result is in the same range as the inputs.
-    float Luminance = dot(SceneColor.rgb, float3(0.2126, 0.7152, 0.0722));
-    
-    // After sampling SceneColor and computing Luminance...
+    // -------------------------------------------------------------------
+    // PRE-EXPOSURE FIX (this is the load-bearing change)
+    // -------------------------------------------------------------------
+    // UE stores SceneColor PRE-EXPOSED: buffer = true_linear * PreExposure,
+    // where PreExposure is derived from the previous frame's auto exposure
+    // to keep values inside FP16 range. Everything downstream of us divides
+    // it back out.
+    //
+    // Every physically-anchored constant in this shader (0.18 mid grey,
+    // thresholds, the LogC4 curve, false-colour landmarks) is defined in
+    // TRUE scene-linear units. Operating on the pre-exposed buffer meant:
+    //   - the blend band [ShadowThreshold, HighlightThreshold] landed at an
+    //     arbitrary, auto-exposure-dependent place in the real scene
+    //     (in your test EXR, PreExposure was ~1/12, which put the band
+    //     right across the character's midtones), and
+    //   - LogC4 encoded the wrong values, and
+    //   - false colour was normalised toward "correct" every frame.
+    //
+    // So: divide PreExposure out on read, multiply it back in on write.
+    // Whatever value V we want to survive to the display / EXR export must
+    // be stored as V * PreExposure, because the rest of the chain will
+    // divide by PreExposure.
+    float3 LinearScene = SceneColor.rgb * View.OneOverPreExposure;
+
+    // Optional test-exposure offset in stops. Use this (not the gain CVars)
+    // when you want to push the image up or down while testing -- it is an
+    // explicit exposure control and does not distort the DGA simulation.
+    LinearScene *= exp2(ExposureOffset);
+
+    // Rec.709 luminance of TRUE scene light
+    float Luminance = dot(LinearScene, float3(0.2126, 0.7152, 0.0722));
 
     if (DiagLuminance != 0)
     {
-    // Bypass all DGA processing; output false-colour luminance instead.
-    // Use saturate(Luminance) so values above 1.0 all show as red.
-        OutputTexture[DispatchThreadId.xy] = float4(
-        ARRIFalseColour(saturate(Luminance)), 1.0
-    );
+        float ClipLuminance = FullWell / max(LowGainAmount, 1e-4);
+        float3 FC = ExposureFalseColour(Luminance, ClipLuminance);
+        // Re-apply PreExposure so the chart colours survive the downstream
+        // divide. For exact colours, view with the tonemapper disabled
+        // (ShowFlag.Tonemapper 0); through the filmic tonemapper the bands
+        // stay identifiable but slightly desaturated.
+        OutputTexture[DispatchThreadId.xy] = float4(FC * View.PreExposure, 1.0);
         return;
     }
 
+    // -------------------------------------------------------------------
+    // DUAL GAIN MERGE (radiometrically normalised -- the banding fix)
+    // -------------------------------------------------------------------
+    // The old merge blended (Scene * 4) with (Scene * 1) directly. That made
+    // the transfer function NON-MONOTONIC through the blend band:
+    //   f(L) = L * lerp(HighGain, LowGain, smoothstep(0.18, 0.5, L))
+    //   f(0.18) = 0.72 but f(0.5) = 0.5
+    // i.e. brighter scene areas rendered DARKER than dimmer ones inside the
+    // band -- a tone reversal. That is exactly the harsh, gradient-free
+    // light/shadow switching you saw around the character model.
+    //
+    // On the real ALEV4 sensor, both gain paths read the SAME exposure and
+    // are normalised back to a common photometric scale before combination.
+    // The merged image is radiometrically transparent; the paths differ only
+    // in where they CLIP (and, on real hardware, in noise):
+    //   - the high-gain read saturates the ADC earlier -> clips at
+    //     FullWell / HighGain in scene units, but has cleaner shadows,
+    //   - the low-gain read keeps highlights up to FullWell / LowGain.
+    //
+    // Each path below: amplify, clip at ADC full-scale, normalise back.
+    float3 HighGainPath = min(LinearScene * HighGainAmount, FullWell) / HighGainAmount;
+    float3 LowGainPath  = min(LinearScene * LowGainAmount,  FullWell) / LowGainAmount;
 
-
-    // High-gain path: simulates a sensor read with high amplification.
-    // Lifts shadows. Highlights will exceed 1.0 — that's intentional.
-    float3 HighGainPath = SceneColor.rgb * HighGainAmount;
-
-    // Low-gain path: simulates a sensor read with low amplification.
-    // Preserves highlights. Shadows are crushed.
-    float3 LowGainPath = SceneColor.rgb * LowGainAmount;
-
-    // Smooth luminance-weighted blend mask.
-    // 0 in shadows (full high-gain), 1 in highlights (full low-gain),
-    // smooth S-curve transition between the two thresholds.
+    // Luminance-weighted crossfade: high-gain data in shadows, low-gain in
+    // highlights. Because both paths now agree below their clip points, the
+    // seam is invisible -- the mask only decides WHICH path's clipping and
+    // (future) noise characteristics a pixel inherits.
     float Mask = smoothstep(ShadowThreshold, HighlightThreshold, Luminance);
-    
-    // Merge the two paths (unchanged)
+
+    // Safety: guarantee the crossfade has fully reached the low-gain path
+    // well before the high-gain path saturates, whatever the user sets the
+    // thresholds or gains to. Otherwise clipped high-gain data could leak
+    // into the blend and flatten highlights.
+    float HighClip = FullWell / max(HighGainAmount, 1e-4);
+    Mask = max(Mask, smoothstep(0.25 * HighClip, 0.75 * HighClip, Luminance));
+
     float3 Merged = lerp(HighGainPath, LowGainPath, Mask);
-    
-    // NEW: inject sensor noise at the sensor stage (scene-referred linear) there is a previous spot up in the code
-    Merged = ApplySensorNoise(Merged, DispatchThreadId.xy, NoiseFrameIndex);
-    
 
-// === NEW: Gamut transform — Rec.709 linear → AWG4 linear ===
-// mul(M, v) in HLSL: M is row-major, v is a column vector.
-// Each output component is the dot of one row with the input.
+    // Gamut transform: Rec.709 linear -> AWG4 linear
     float3 MergedAWG4 = mul(Rec709_To_AWG4, Merged);
-    
 
-// Apply LogC4 encoding (now correctly receives AWG4 primaries)
+    // LogC4 encode (or stay linear in AWG4 if disabled)
     float3 FinalRGB = (LogC4Enabled != 0) ? EncodeLogC4(MergedAWG4) : MergedAWG4;
 
-// Write back. FP32 register narrows to FP16 on store.
-    //OutputTexture[DispatchThreadId.xy] = float4(FinalRGB, SceneColor.a); //previous output
-    float3 OutRGB = FinalRGB * View.PreExposure;
-
-    // Centre spot-meter: paints a reticle with the false-colour exposure ZONE of the
-    // centre pixel. Point it at a grey card and dial manual exposure until it reads GREEN.
-    if (SpotMeter != 0)
-    {
-        int2 c = int2(ViewSize * 0.5);
-        int2 dpix = abs(int2(DispatchThreadId.xy) - c);
-        bool inSwatch = (dpix.x <= 18 && dpix.y <= 18);
-        bool inBorder = (dpix.x <= 24 && dpix.y <= 24) && !inSwatch;
-        if (inSwatch || inBorder)
-        {
-            float3 cs = SceneColorTexture.Load(int3(c, 0)).rgb / View.PreExposure;
-            float cLum = dot(cs, float3(0.2126, 0.7152, 0.0722));
-            OutRGB = inSwatch ? ARRIFalseColour(cLum) : float3(1.0, 1.0, 1.0);
-        }
-    }
-
-    OutputTexture[DispatchThreadId.xy] = float4(OutRGB, SceneColor.a);
+    // Re-apply PreExposure on write (see note above). With this in place,
+    // an EXR export of the buffer yields clean 0..1 LogC4 signal instead of
+    // LogC4-times-arbitrary-constant.
+    OutputTexture[DispatchThreadId.xy] = float4(FinalRGB * View.PreExposure, SceneColor.a);
 }
