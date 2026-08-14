@@ -285,6 +285,8 @@
 /I "Editor/SceneDepthPickerMode/Public"
 /I "../Intermediate/Build/Win64/UnrealEditor/Inc/AnimationEditMode/UHT"
 /I "Editor/AnimationEditMode/Public"
+/I "../Intermediate/Build/Win64/UnrealEditor/Inc/CinematicCamera/UHT"
+/I "Runtime/CinematicCamera/Public"
 /I "C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Source"
 /I "C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Plugins/ALEV4DGA/Source/ALEV4DGA/Public"
 /I "C:/Users/sciau/Documents/Unreal Projects/Alev4Sim/Intermediate/Build/Win64/x64/Alev4SimEditor/Development/UnrealEd"
