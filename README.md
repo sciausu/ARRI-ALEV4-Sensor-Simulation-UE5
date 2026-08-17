@@ -1,3 +1,11 @@
+# ARRI ALEV4 Sensor Simulation for Unreal Engine 5
+
+A real-time Unreal Engine 5 plugin simulating the ARRI ALEV4 sensor's Dual Gain
+Architecture, AWG4 colour space, and LogC4 encoding.
+
+*Developed as an undergraduate capstone project (EECS 4080) at York University,
+supervised by Prof. Michael Brown.*
+
 ## Setup
 1. Download the ZIP and extract it.
 2. Move the extracted folder into your Unreal project's `Plugins` folder
