@@ -66,3 +66,21 @@ Note this must be a **LogC4** LUT — legacy LogC3 LUTs (including some that shi
 with grading software by default) will not decode this footage correctly.
 
 For comparisons and technical detail: https://sciausu.github.io/ALEV4SIM/
+
+
+## Attribution
+
+Designed and directed by Stefan Ciausu. Sensor architecture, colour-science
+research, debugging, and validation by me; shader and plugin implementation
+developed with AI assistance (Claude).
+
+Sensor noise model characterised from ARRI ALEXA 35 reference footage
+provided by Trevor Calham.
+
+## Disclaimer
+
+This is an independent educational project and is not affiliated with,
+endorsed by, or supported by ARRI. ARRI, ALEXA, ALEV, LogC4 and AWG4 are
+trademarks of Arnold & Richter Cine Technik GmbH & Co. Betriebs KG. The
+LogC4 transfer function and AWG4 primaries are implemented from ARRI's
+publicly published specifications.
